@@ -34,6 +34,12 @@ const EVENTS = new Set(
   (process.env.RELAY_EVENTS || 'SIGNAL')
     .split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
 );
+// Advisory sub-types to MUTE even when ADVISORY is enabled. Default mutes the
+// "🩸 CUT LOSS?" posts. Set ADVISORY_MUTE="" to re-enable, or "LOSS,RISK" to mute more.
+const ADVISORY_MUTE = new Set(
+  (process.env.ADVISORY_MUTE === undefined ? 'LOSS' : process.env.ADVISORY_MUTE)
+    .split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
+);
 
 // On reconnect the relay compares the stream's state dump against what it has
 // already posted, so signals emitted while it was disconnected are not lost.
@@ -275,6 +281,7 @@ function onEvent(evt) {
   }
 
   if (type === 'ADVISORY') {
+    if (ADVISORY_MUTE.has(action)) { console.log(`🔇 muted ${action} $${data.symbol}`); return; }
     if (!markSeen(`adv:${data.address}:${action}`)) return;
     console.log(`💡 ${action} $${data.symbol}`);
     if (EVENTS.has('ADVISORY')) postAdvisory(action, data);
