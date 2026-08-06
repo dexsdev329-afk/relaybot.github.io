@@ -34,10 +34,13 @@ const EVENTS = new Set(
   (process.env.RELAY_EVENTS || 'SIGNAL')
     .split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
 );
-// Advisory sub-types to MUTE even when ADVISORY is enabled. Default mutes the
-// "🩸 CUT LOSS?" posts. Set ADVISORY_MUTE="" to re-enable, or "LOSS,RISK" to mute more.
+// Advisory sub-types to MUTE even when ADVISORY is enabled. Default mutes ALL
+// advisories — the "🩸 CUT LOSS?" (LOSS), "⚠️ HEADS UP" (RISK) and
+// "💡 PROFIT WATCH" (PROFIT) posts — so a channel only ever gets clean entry
+// signals. Set ADVISORY_MUTE="" to re-enable them all, or a subset like
+// "LOSS,RISK" to keep only PROFIT.
 const ADVISORY_MUTE = new Set(
-  (process.env.ADVISORY_MUTE === undefined ? 'LOSS' : process.env.ADVISORY_MUTE)
+  (process.env.ADVISORY_MUTE === undefined ? 'LOSS,RISK,PROFIT' : process.env.ADVISORY_MUTE)
     .split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
 );
 
