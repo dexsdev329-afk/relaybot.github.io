@@ -35,14 +35,24 @@ const EVENTS = new Set(
     .split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
 );
 // Advisory sub-types to MUTE even when ADVISORY is enabled. Default mutes ONLY
-// the bearish "🩸 CUT LOSS?" (LOSS) post — it reads negative on a hype channel.
-// The take-profit alerts stay ON: "💡 PROFIT WATCH" (PROFIT) and "⚠️ HEADS UP"
-// (RISK) both tell holders to lock in gains, which is good for the channel.
-// Set ADVISORY_MUTE="" to show every advisory, or "LOSS,RISK,PROFIT" to hide all.
+// The bearish "🩸 CUT LOSS?" post is GONE — not muted by default, removed.
+//
+// It was already muted unless ADVISORY_MUTE said otherwise, and it went out
+// anyway: one env var set for another reason silently brought it back. A
+// default that a single variable can undo is not a decision, it's a hope.
+//
+// Why it had to go rather than be re-muted: it tells holders the thing is
+// dead, on the channel that called it. It is the one post that can only ever
+// make a reader feel worse, and there is nothing to lock in at the end of it.
+//
+// The take-profit alerts stay: "💡 PROFIT WATCH" (PROFIT) and "⚠️ HEADS UP"
+// (RISK) both tell holders to secure gains — that is worth interrupting
+// someone for. ADVISORY_MUTE still hides those two if ever needed.
 const ADVISORY_MUTE = new Set(
-  (process.env.ADVISORY_MUTE === undefined ? 'LOSS' : process.env.ADVISORY_MUTE)
+  (process.env.ADVISORY_MUTE || '')
     .split(',').map(s => s.trim().toUpperCase()).filter(Boolean)
 );
+ADVISORY_MUTE.add('LOSS');           // jamais, quoi que dise l'environnement
 
 // On reconnect the relay compares the stream's state dump against what it has
 // already posted, so signals emitted while it was disconnected are not lost.
@@ -218,13 +228,6 @@ function postAdvisory(action, d) {
       `💡 *PROFIT WATCH* · *$${safeSym(d.symbol)}*\n\n` +
       `Up *+${fmtX(x)}* since our call ($${formatNumber(d.entryMc)} → $${formatNumber(d.curMc)} MC).\n` +
       `Momentum's cooling off — could be a smart spot to secure some. 🫡\n\n` +
-      `_Your bag, your call. NFA._` + tail;
-  } else if (action === 'LOSS') {
-    caption =
-      `🩸 *CUT LOSS?* · *$${safeSym(d.symbol)}*\n\n` +
-      `Down *-${Math.round((1 - x) * 100)}%* from our call ($${formatNumber(d.entryMc)} → $${formatNumber(d.curMc)} MC).\n` +
-      `Still bleeding — volume dried up, sells in control. Doesn't look like it's coming back.\n` +
-      `If you're still holding, might be the spot to cut it and move on.\n\n` +
       `_Your bag, your call. NFA._` + tail;
   } else { // RISK
     caption =
