@@ -102,8 +102,31 @@ posted, recovering anything emitted while it was down. Only calls younger than
 | `RELAY_EVENTS` | `SIGNAL` | Comma list: `SIGNAL,MILESTONE,ADVISORY,CLOSED`. |
 | `RELAY_CATCHUP_MAX_AGE_MIN` | `180` | How far back a reconnect may recover signals. |
 | `RELAY_STATE_FILE` | `./relay-state.json` | Dedupe state. Put it on a persistent volume. |
+| `RELAY_MIN_VOLUME` | `30000` | Skip signals whose entry 24h volume is below this. `0` disables the filter. |
+| `RELAY_REQUIRE_SOCIALS` | off | `1` also drops signals with no socials. Mostly redundant with the volume filter — see below. |
 
 The bot must be an **admin** of the target channel to post.
+
+### The volume filter
+
+Measured on 442 calls (17 Jul → 14 Aug), peak multiple since entry:
+
+| Entry 24h volume | Calls | Reached 2x | Reached 5x | Never moved 10% |
+|---|---|---|---|---|
+| ≥ $30k | 229 | **38.0 %** | 13.5 % | 16 % |
+| < $30k | 213 | **15.5 %** | 2.3 % | 31 % |
+
+The gap is 22.5 pt ± 7.9 (z = 5.55). Checked again on the most recent half of
+the period — which chose none of the thresholds — it holds: 42.6 % vs 20.8 %
+(z = 3.60).
+
+Cost: 48 % of calls stop being posted, and 14 % of the period's 5x runners go
+with them. What it buys: the half that is dropped has a median peak of 1.25x
+and a third of it never moves at all.
+
+Requiring socials is **the same signal, not a second one** — 89 % of calls
+agree on both criteria, and stacking them adds ~1.5 pt, which is inside the
+noise. The flag exists; it is off.
 
 Mirror everything, including exits and heads-ups:
 

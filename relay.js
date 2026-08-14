@@ -54,6 +54,45 @@ const ADVISORY_MUTE = new Set(
 );
 ADVISORY_MUTE.add('LOSS');           // jamais, quoi que dise l'environnement
 
+// ── LE FILTRE ───────────────────────────────────────────────────────────────
+// Mesure sur 442 calls du 17 juillet au 14 aout : le VOLUME 24H A L'ENTREE
+// separe le livre en deux populations qui n'ont rien a voir.
+//
+//   volume ≥ 30k : 38,0 % atteignent 2x  (n=229)
+//   volume < 30k : 15,5 % atteignent 2x  (n=213)
+//   ecart 22,5 pt ± 7,9 — z = 5,55
+//
+// Verifie sur la moitie la plus RECENTE, qui n'a servi a choisir aucun seuil :
+// 42,6 % contre 20,8 %, z = 3,60. La regle tient hors de l'echantillon qui l'a
+// produite ; c'est la seule chose qui distingue un filtre d'un ajustement.
+//
+// Ce que ca coute : 48 % des calls ne partent plus, et 14 % des 5x de la
+// periode avec eux. Ce que ca rend : la moitie ecartee a un pic median de
+// 1,25x et un tiers n'a jamais pris dix pour cent — c'est elle qui fait
+// ressembler le canal a un robot qui poste tout ce qui bouge.
+//
+// SOCIALS : le meme signal, pas un second. 89 % des calls sont d'accord sur
+// les deux criteres (203 ont les deux, 192 n'ont ni l'un ni l'autre). Empiler
+// les deux ne gagne qu'un point et demi — dans le bruit. Le drapeau existe,
+// il est ETEINT par defaut, et ce commentaire dit pourquoi.
+//
+// Mettre RELAY_MIN_VOLUME=0 rend le comportement d'avant, sans redeploiement.
+const MIN_VOLUME = Number(process.env.RELAY_MIN_VOLUME || 30000);
+const REQUIRE_SOCIALS = process.env.RELAY_REQUIRE_SOCIALS === '1';
+
+/** Ce call merite-t-il d'interrompre quelqu'un ? */
+function retenu(p) {
+  if (MIN_VOLUME > 0 && (Number(p.entryVolume) || 0) < MIN_VOLUME) return 'volume';
+  if (REQUIRE_SOCIALS && !p.hasSocials) return 'socials';
+  return null;
+}
+
+// Ce qui est REELLEMENT parti sur le canal. Un « 10X HIT » sur un call qu'on
+// n'a jamais poste ne veut rien dire pour le lecteur : les suites (paliers,
+// conseils, cloture) ne partent que si l'entree est partie.
+let posted = new Set();
+let filtres = 0;
+
 // On reconnect the relay compares the stream's state dump against what it has
 // already posted, so signals emitted while it was disconnected are not lost.
 // Anything older than this is treated as backlog and stays silent.
@@ -79,6 +118,10 @@ function loadState() {
     seen = new Set(d.seen || []);
     lastEntryTime = d.lastEntryTime || 0;
     seeded = !!d.seeded;
+    /* Un fichier d'avant le filtre n'a pas de liste `posted` : tout ce qui
+       etait vu etait poste. On reprend donc `seen` telle quelle, pour qu'un
+       redeploiement ne fasse pas taire les suites des calls deja annonces. */
+    posted = new Set(d.posted || d.seen || []);
     console.log(`↺ state restored — ${seen.size} signals already posted`);
   } catch (e) { /* first run */ }
 }
@@ -86,7 +129,9 @@ function saveState() {
   try {
     const arr = [...seen].slice(-SEEN_CAP);
     seen = new Set(arr);
-    fs.writeFileSync(STATE_FILE, JSON.stringify({ seen: arr, lastEntryTime, seeded }));
+    const pArr = [...posted].slice(-SEEN_CAP);
+    posted = new Set(pArr);
+    fs.writeFileSync(STATE_FILE, JSON.stringify({ seen: arr, posted: pArr, lastEntryTime, seeded }));
   } catch (e) { console.warn('state save failed:', e.message); }
 }
 
@@ -274,13 +319,31 @@ function onEvent(evt) {
     if (p.isMoonBag) return;
     if (!markSeen('sig:' + (p.address || p.id))) return;
     if (p.entryTime > lastEntryTime) { lastEntryTime = p.entryTime; saveState(); }
+
+    /* L'ecart est marque comme VU avant d'etre ecarte : sans ca, le rattrapage
+       de reconnexion le represente a chaque redemarrage. */
+    const ecarte = retenu(p);
+    if (ecarte) {
+      filtres++;
+      console.log(`⏭ ecarte $${p.symbol} (${ecarte}) — vol $${formatNumber(p.entryVolume)} ` +
+                  `· ${filtres} ecartes depuis le demarrage`);
+      return;
+    }
+
     console.log(`🎯 SIGNAL $${p.symbol} @ $${formatNumber(p.entryMarketCap)} MC`);
     if (EVENTS.has('SIGNAL')) postSignal(p);
+    if (p.address) { posted.add(p.address); saveState(); }
     return;
   }
 
+  /* Les suites ne partent que si l'entree est partie. « 10X HIT $FOO » sur un
+     call que le canal n'a jamais annonce ne dit rien a personne — et le
+     lecteur qui remonte le fil ne trouve pas l'entree correspondante. */
+  const annonce = (a) => !a || posted.has(a);
+
   if (type === 'TRADE' && action === 'MILESTONE') {
     if (!markSeen(`ms:${data.address}:${data.milestone}`)) return;
+    if (!annonce(data.address)) return;
     console.log(`🚀 ${data.milestone}X $${data.symbol}`);
     if (EVENTS.has('MILESTONE')) postMilestone(data);
     return;
@@ -289,6 +352,7 @@ function onEvent(evt) {
   if (type === 'ADVISORY') {
     if (ADVISORY_MUTE.has(action)) { console.log(`🔇 muted ${action} $${data.symbol}`); return; }
     if (!markSeen(`adv:${data.address}:${action}`)) return;
+    if (!annonce(data.address)) return;
     console.log(`💡 ${action} $${data.symbol}`);
     if (EVENTS.has('ADVISORY')) postAdvisory(action, data);
     return;
@@ -298,6 +362,7 @@ function onEvent(evt) {
   // "sell now". INACTIVE is the one close it announces: the call went dead.
   if (type === 'TRADE' && action === 'CLOSE' && data.reason === 'INACTIVE') {
     if (!markSeen('close:' + data.address)) return;
+    if (!annonce(data.address)) return;
     console.log(`💤 CLOSED $${data.symbol}`);
     if (EVENTS.has('CLOSED')) postClosed(data);
   }
@@ -388,6 +453,9 @@ function reconnect() {
 // ── BOOT ────────────────────────────────────────────────────────────────────
 loadState();
 console.log(`🎯 sniper relay → chat ${CHAT_ID} | forwarding: ${[...EVENTS].join(', ')}`);
+console.log(`   filtre : volume 24h ≥ $${formatNumber(MIN_VOLUME)}` +
+  (REQUIRE_SOCIALS ? ' + socials obligatoires' : '') +
+  (MIN_VOLUME > 0 ? '  (mesure : 38 % a 2x contre 15 % sous le seuil)' : '  — desactive'));
 connect();
 
 process.on('SIGINT', () => { saveState(); process.exit(0); });
